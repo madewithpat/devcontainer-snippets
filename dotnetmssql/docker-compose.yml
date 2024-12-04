@@ -1,0 +1,87 @@
+version: '3'
+
+services:
+  app:
+    build: 
+      context: .
+      dockerfile: Dockerfile
+
+    volumes:
+      - ../..:/workspaces/tm:cached
+      - ~/.ssh:/home/vscode/.ssh
+
+    # Overrides default command so things don't shut down after the process ends.
+    command: sleep infinity
+
+    # Runs app on the same network as the database container, allows "forwardPorts" in devcontainer.json function.
+    # network_mode: service:db
+
+    # Uncomment to connect as root instead. More info: https://aka.ms/dev-containers-non-root.
+    # user: root
+
+    # Use "forwardPorts" in **devcontainer.json** to forward an app port locally. 
+    # (Adding the "ports" property to this file will not forward from a Codespace.)
+
+  loki:
+      image: grafana/loki:latest
+      restart: unless-stopped
+      network_mode: service:app
+      command: -config.file=/etc/loki/local-config.yaml
+      volumes:
+        - ./loki/loki-config.yaml:/etc/loki/local-config.yaml
+
+  grafana:
+    image: grafana/grafana:latest
+    restart: unless-stopped
+    network_mode: service:app
+    environment:
+      # GF_SECURITY_ADMIN_PASSWORD: admin
+      - GF_PATHS_PROVISIONING=/etc/grafana/provisioning
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+    depends_on:
+      - loki
+    entrypoint:
+      - sh
+      - -euc
+      - |
+        mkdir -p /etc/grafana/provisioning/datasources
+        cat <<EOF > /etc/grafana/provisioning/datasources/ds.yaml
+        apiVersion: 1
+        datasources:
+          - name: Loki
+            type: loki
+            access: proxy
+            url: http://localhost:3100
+            jsonData:
+              httpHeaderName1: "X-Scope-OrgID"
+            secureJsonData:
+              httpHeaderValue1: "tenant1"
+        EOF
+        /run.sh
+
+  db:
+    image: mcr.microsoft.com/mssql/server:2019-latest
+    restart: unless-stopped
+    network_mode: service:app
+    environment:
+      SA_PASSWORD: P@ssw0rd
+      ACCEPT_EULA: Y
+
+    # Add "forwardPorts": ["1433"] to **devcontainer.json** to forward MSSQL locally.
+    # (Adding the "ports" property to this file will not forward from a Codespace.)
+
+  rabbit:
+    image: rabbitmq:3-management
+    container_name: rabbit
+    environment:
+      - RABBITMQ_DEFAULT_USER=dih-admin
+      - RABBITMQ_DEFAULT_PASS=password
+    # This network mode is required in order for "forwardPorts" to work
+    # forwardPorts is required if you want to access the management interface locally
+    network_mode: service:app
+    volumes:
+      - ./rabbit/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf
+      - ./rabbit/enabled_plugins:/etc/rabbitmq/enabled_plugins
+      # - ./rabbit/data:/var/lib/rabbitmq
+      # - ./rabbit/logs:/var/lib/rabbitmq
